@@ -10,7 +10,7 @@ from datetime import datetime
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from streamlit_chat import message
 import openai
-
+import ta
 # ✅ Streamlit Configuration
 st.set_page_config(page_title="Stock Forecast Dashboard", layout="wide")
 
@@ -163,6 +163,119 @@ def calculate_macd(series, fast_period=12, slow_period=26, signal_period=9):
     macd_line = ema_fast - ema_slow
     signal_line = calculate_ema(macd_line, signal_period)
     return macd_line, signal_line
+def get_stock_data(stock_name):
+    # Fetch latest data row for a stock
+    stock_data = df[df['Symbol'] == stock_name].iloc[-1]
+    return {
+        "Price": stock_data['Close'],
+    }
+
+def load_all_stock_data(pred_dir):
+    import os
+    all_data = []
+    for file in os.listdir(pred_dir):
+        if file.startswith("predictions_") and file.endswith(".csv"):
+            stock_name = file.replace("predictions_", "").replace(".csv", "").upper()
+            df = pd.read_csv(f"{pred_dir}/{file}", parse_dates=["Date"])
+            df["Stock"] = stock_name
+            all_data.append(df)
+    if all_data:
+        return pd.concat(all_data, ignore_index=True)
+    else:
+        return pd.DataFrame()  # empty df if no files
+        
+
+df = load_all_stock_data(PRED_DIR)
+
+all_frames = []
+for stock in df['Stock'].unique():
+    stock_df = df[df['Stock'] == stock].copy()
+    stock_df['EMA_20'] = ta.trend.ema_indicator(stock_df['Close'], window=20)
+    stock_df['RSI'] = ta.momentum.rsi(stock_df['Close'], window=14)
+    all_frames.append(stock_df)
+
+df = pd.concat(all_frames, ignore_index=True)
+
+# --- Helper function to get current price ---
+def get_current_price(stock_name):
+    try:
+        filtered = df[df['Stock'] == stock_name]
+        if not filtered.empty:
+            latest_price = filtered['Close'].iloc[-1]
+        else:
+            latest_price = 0.0
+    except Exception:
+        latest_price = 0.0
+    return latest_price
+
+
+
+def add_indicators(data, selected_indicators):
+    if 'SMA' in selected_indicators:
+        data['SMA_20'] = ta.trend.sma_indicator(data['Close'], window=20)
+    if 'EMA' in selected_indicators:
+        data['EMA_20'] = ta.trend.ema_indicator(data['Close'], window=20)
+    if 'RSI' in selected_indicators:
+        data['RSI'] = ta.momentum.rsi(data['Close'], window=14)
+    if 'MACD' in selected_indicators:
+        data['MACD'] = ta.trend.macd(data['Close'])
+    return data
+def load_all_predictions(data_dir):
+    all_data = []
+    for file in os.listdir(data_dir):
+        if file.endswith(".csv") and file.startswith("predictions_"):
+            file_path = os.path.join(data_dir, file)
+            df = pd.read_csv(file_path, parse_dates=["Date"])
+            stock_name = file.replace("predictions_", "").replace(".csv", "").upper()
+            df["Stock"] = stock_name
+            all_data.append(df)
+    if all_data:
+        return pd.concat(all_data, ignore_index=True)
+    else:
+        return pd.DataFrame()  # empty df if no data found
+
+
+st.header("📊 Compare Multiple Stocks")
+
+available_stocks = df['Symbol'].unique().tolist()
+selected_stocks = st.multiselect("Select stocks to compare", available_stocks)
+
+def get_stock_data(stock_name):
+    stock_data = df[df['Symbol'] == stock_name].iloc[-1]
+    return {
+        "Price": stock_data['Close'],
+        "RSI": stock_data.get('RSI', None),
+        "EMA": stock_data.get('EMA_20', None)
+    }
+
+if selected_stocks:
+    comparison_data = {}
+    for stock in selected_stocks:
+        comparison_data[stock] = get_stock_data(stock)
+    
+    comparison_df = pd.DataFrame(comparison_data).T  # stocks as rows, metrics as columns
+    st.table(comparison_df)
+    
+    # Create grouped bar chart for all metrics at once
+    fig = go.Figure()
+    
+    for metric in comparison_df.columns:
+        fig.add_trace(go.Bar(
+            name=metric,
+            x=comparison_df.index,    # stocks
+            y=comparison_df[metric],
+        ))
+    
+    fig.update_layout(
+        barmode='group',
+        title="Comparison of Metrics by Stock",
+        xaxis_title="Stock",
+        yaxis_title="Value",
+    )
+    
+    st.plotly_chart(fig)
+else:
+    st.info("Select at least two stocks to compare.")
 
 # --- Sidebar Filters ---
 with st.sidebar:
@@ -170,6 +283,97 @@ with st.sidebar:
     available_stocks = get_stock_names(PRED_DIR)
     selected_stock = st.selectbox("📌 Select a Stock", available_stocks)
     indicators = st.multiselect("📊 Technical Indicators", INDICATOR_OPTIONS)
+    
+    # --- Watchlist & Alert Section ---
+    st.markdown("---")
+    st.header("🔖 Watchlist & Alerts")
+
+    # Initialize session state variables if not present
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = []
+
+    if "alerts" not in st.session_state:
+        st.session_state.alerts = {}
+
+    # Add/Remove from Watchlist buttons for the selected stock
+    if selected_stock:
+        if selected_stock not in st.session_state.watchlist:
+            if st.button(f"➕ Add {selected_stock} to Watchlist"):
+                st.session_state.watchlist.append(selected_stock)
+                st.success(f"Added {selected_stock} to watchlist!")
+        else:
+            if st.button(f"❌ Remove {selected_stock} from Watchlist"):
+                st.session_state.watchlist.remove(selected_stock)
+                st.success(f"Removed {selected_stock} from watchlist!")
+
+    # Show the current watchlist
+    if st.session_state.watchlist:
+        st.markdown("### Your Watchlist:")
+        for stock in st.session_state.watchlist:
+            st.write(f"- {stock}")
+
+        # Select stock from watchlist to set alert
+        alert_stock = st.selectbox("Select stock to set alert", st.session_state.watchlist, key="alert_stock_select")
+
+        alert_type = st.selectbox("Alert Type", ["Price Above", "Price Below"], key="alert_type_select")
+        alert_price = st.number_input("Alert Price", min_value=0.0, format="%.2f", key="alert_price_input")
+
+        if st.button("Set Alert"):
+            st.session_state.alerts[alert_stock] = {"type": alert_type, "price": alert_price}
+            st.success(f"Alert set for {alert_stock}: {alert_type} {alert_price:.2f}")
+
+        # Display current alerts
+        if st.session_state.alerts:
+            st.markdown("### Active Alerts:")
+            for stk, alert in st.session_state.alerts.items():
+                st.write(f"{stk}: {alert['type']} {alert['price']:.2f}")
+    else:
+        st.info("Add stocks to watchlist to set alerts.")
+
+# --- Get current price of selected stock for alert check ---
+if selected_stock:
+    current_price = get_current_price(selected_stock)
+else:
+    current_price = 0.0
+
+def render_alert(stock, alert_type, alert_price, current_price):
+    # Define colors for alert types
+    color = "#d9534f" if alert_type == "Price Below" else "#5cb85c"  # red for below, green for above
+    
+    # Emoji for alert type
+    emoji = "🔻" if alert_type == "Price Below" else "🔺"
+    
+    alert_html = f"""
+    <div style="
+        background-color: {color}; 
+        color: white; 
+        padding: 12px; 
+        border-radius: 8px; 
+        margin: 8px 0;
+        font-weight: bold;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: Arial, sans-serif;
+    ">
+        <span style="font-size: 24px;">{emoji}</span>
+        <span>Alert: <strong>{stock}</strong> price is <strong>{alert_type.lower()}</strong> <strong>{alert_price:.2f}</strong> (Current: {current_price:.2f})</span>
+    </div>
+    """
+    st.markdown(alert_html, unsafe_allow_html=True)
+
+# Usage in your alert check block:
+
+if selected_stock in st.session_state.alerts:
+    alert = st.session_state.alerts[selected_stock]
+    alert_type = alert["type"]
+    alert_price = alert["price"]
+
+    if alert_type == "Price Above" and current_price > alert_price:
+        render_alert(selected_stock, alert_type, alert_price, current_price)
+    elif alert_type == "Price Below" and current_price < alert_price:
+        render_alert(selected_stock, alert_type, alert_price, current_price)
+
 
 # --- Main Area ---
 if selected_stock:
@@ -327,6 +531,7 @@ if sentiment_results:
                 st.info(f"No recent news found for {selected_stock}.")
 else:
         st.info("Select a stock from the sidebar to view its forecast and analysis.")
+     
 
 
 # Initialize chat history if not present
@@ -367,7 +572,7 @@ def handle_input():
 
         st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
 
-        # Clear the input field (will only work because it's inside the callback)
+        # Clear the input field
         st.session_state.user_input_field = ""
 
 # --- Chatbot UI ---
@@ -376,7 +581,8 @@ with st.expander("💬 Chatbot Assistant (Ask about indicators, usage help)", ex
     for i, chat in enumerate(st.session_state.chat_history):
         message(chat["content"], is_user=(chat["role"] == "user"), key=f"chat_{i}")
 
-    # Text input with on_change callback (no need for button)
-    st.text_input("Type your message and press Enter...", 
-                  key="user_input_field", 
-                  on_change=handle_input)
+    st.text_input(
+        "Type your message and press Enter...",
+        key="user_input_field",
+        on_change=handle_input
+    )
