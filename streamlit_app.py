@@ -283,7 +283,9 @@ with st.sidebar:
     available_stocks = get_stock_names(PRED_DIR)
     selected_stock = st.selectbox("📌 Select a Stock", available_stocks)
     indicators = st.multiselect("📊 Technical Indicators", INDICATOR_OPTIONS)
-    
+    # Model selection dropdown
+    model_choice = st.selectbox("🧠 Select Forecasting Model", ("LSTM", "Bidirectional LSTM"))
+
     # --- Watchlist & Alert Section ---
     st.markdown("---")
     st.header("🔖 Watchlist & Alerts")
@@ -377,8 +379,19 @@ if selected_stock in st.session_state.alerts:
 
 # --- Main Area ---
 if selected_stock:
-    st.subheader(f"📈 Stock Performance for {selected_stock}")
-    pred_file = os.path.join(PRED_DIR, f"predictions_{selected_stock.lower()}.csv") # Ensure lowercase filename
+    #st.subheader(f"📈 Stock Performance for {selected_stock} using {model_choice}")
+
+    # Normalize model choice to get correct filename
+    if model_choice.lower() == "bidirectional lstm":
+        pred_file = os.path.join(PRED_DIR, f"{selected_stock.upper()}_with_prediction.csv")
+    elif model_choice.lower() == "lstm":
+        pred_file = os.path.join(PRED_DIR, f"predictions_{selected_stock.upper()}.csv")
+
+    else:
+        st.error("❌ Unsupported model selected!")
+        st.stop()
+
+    #st.write(f"📄 Loading file: `{pred_file}`")  # For debugging, optional
     try:
         df = pd.read_csv(pred_file, parse_dates=["Date"])
     except Exception as e:
@@ -387,7 +400,21 @@ if selected_stock:
         with st.spinner("Generating chart..."):
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=df["Date"], y=df["Close"], mode="lines", name="Actual Price", line=dict(color='#636EFA')))
-            fig.add_trace(go.Scatter(x=df["Date"], y=df["Predictions"], mode="lines", name="Predicted Price", line=dict(color='#FFA15A')))
+            # Try to detect the prediction column automatically
+            possible_pred_cols = ["Predictions", "Predicted", "Prediction", "with_prediction"]
+            prediction_column = next((col for col in possible_pred_cols if col in df.columns), None)
+
+            if prediction_column:
+                 fig.add_trace(go.Scatter(
+        x=df["Date"],
+        y=df[prediction_column],
+        mode="lines",
+        name="Predicted Price",
+        line=dict(color='#FFA15A')
+    ))
+            else:
+               st.warning(f"⚠️ Prediction column not found in file: `{pred_file}`.\nAvailable columns: {list(df.columns)}")
+
 
             if "SMA-20" in indicators:
                 df["SMA20"] = df["Close"].rolling(window=20).mean()
@@ -553,27 +580,45 @@ def handle_input():
             bot_reply = "RSI (Relative Strength Index) measures the speed and change of price movements. Values >70 indicate overbought, <30 indicate oversold conditions."
         elif "macd" in user_text:
             bot_reply = "MACD (Moving Average Convergence Divergence) shows trend strength and momentum using the difference between two EMAs. Useful for spotting trend reversals."
+        elif "lstm" in user_text and "bidirectional" not in user_text:
+            bot_reply = "LSTM (Long Short-Term Memory) is a type of neural network used for stock price forecasting. It captures temporal dependencies and trends from historical price data."
+        elif "bidirectional lstm" in user_text or ("bidirectional" in user_text and "lstm" in user_text):
+            bot_reply = "Bidirectional LSTM processes time series data in both forward and backward directions, helping capture past and future context for more accurate stock predictions."
         elif "indicator" in user_text or "help" in user_text:
             bot_reply = "You can select technical indicators from the sidebar (SMA, EMA, RSI, MACD) to visualize them on the stock chart. Just check the boxes!"
         elif "how to" in user_text or "usage" in user_text:
-            bot_reply = "To use the dashboard: Select a stock from the sidebar, choose indicators, and view price trends, forecasts, and news sentiment analysis."
+            bot_reply = "To use the dashboard: Select a stock, choose indicators, view trends, forecasts, news sentiment, and manage your watchlist or alerts from the sidebar."
         elif "candlestick" in user_text or "chart" in user_text or "graph" in user_text:
-            bot_reply = "Candlestick charts show the open, high, low, and close prices. A green (or hollow) candle shows price went up, a red (or filled) candle shows price went down."
+            bot_reply = "Candlestick charts show open, high, low, and close prices. A green candle shows price increase; a red candle shows a price drop."
         elif "support" in user_text:
-            bot_reply = "Support is a price level where the stock tends to find buying interest, preventing it from falling further. It's visible as a floor on the chart."
+            bot_reply = "Support is a price level where the stock tends to find buying interest, acting as a floor that prevents further decline."
         elif "resistance" in user_text:
-            bot_reply = "Resistance is a price level where the stock tends to face selling pressure, preventing it from rising further. It acts like a ceiling."
+            bot_reply = "Resistance is a price level where selling pressure prevents the stock from rising, acting like a ceiling."
         elif "trend" in user_text:
-            bot_reply = "An uptrend is when prices make higher highs and higher lows. A downtrend is when prices make lower highs and lower lows. Trendlines help visualize them."
+            bot_reply = "An uptrend means higher highs and higher lows; a downtrend means lower highs and lower lows. Use trendlines to spot them visually."
         elif "volume" in user_text:
-            bot_reply = "Volume shows how many shares were traded during a time period. High volume during a price move confirms strength; low volume may signal weakness."
+            bot_reply = "Volume reflects the number of shares traded. High volume confirms strong price moves; low volume may signal weakness."
+        elif "news" in user_text or "sentiment" in user_text:
+            bot_reply = "The dashboard analyzes news sentiment to gauge market mood—positive, neutral, or negative—for the selected stock."
+        elif "forecast" in user_text or "prediction" in user_text:
+            bot_reply = "Forecasts are generated using LSTM models, visualized on a line chart to show future price movement trends based on historical data."
+        elif "watchlist" in user_text:
+            bot_reply = "Add stocks to your watchlist from the sidebar for quick access and monitoring without having to search each time."
+        elif "alert" in user_text or "notification" in user_text:
+            bot_reply = "You can set alerts for price levels, indicators (like RSI > 70), or volume spikes. Alerts notify you in real-time when conditions are met."
+        elif "download" in user_text or "save" in user_text:
+            bot_reply = "You can download the chart as an image or export stock data to CSV using the download buttons on the dashboard."
+        elif "toggle" in user_text or "switch" in user_text:
+            bot_reply = "Use the toggle to switch between candlestick and line charts for better clarity based on your preference."
+        elif "compare" in user_text or "multiple stocks" in user_text:
+            bot_reply = "You can compare multiple stocks side-by-side using dynamic charts and metrics like RSI, MACD, and trendlines for each."
         else:
-            bot_reply = "I'm a simple assistant. You can ask about SMA, EMA, RSI, MACD, or how to use this dashboard."
+            bot_reply = "I'm your assistant! Ask me about technical indicators, chart types, forecasts, sentiment, alerts, LSTM models, or how to use the dashboard."
 
         st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
 
-        # Clear the input field
-        st.session_state.user_input_field = ""
+ # Clear the input field
+st.session_state.user_input_field = ""
 
 # --- Chatbot UI ---
 st.markdown("<hr>", unsafe_allow_html=True)
