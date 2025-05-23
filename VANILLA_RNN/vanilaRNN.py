@@ -126,34 +126,3 @@ for ticker in tickers:
     print(f"  Saved {out_path}")
 
 print("\nAll stocks done!")
-
-# 5. OPTIONAL: example real-time forecast for NEXT DAY for a single ticker
-def predict_next_day(ticker):
-    """
-    Load the saved model+scaler, read the last SEQ_LEN days
-    from the original CSV, compute indicators, and predict
-    the next day's Close price.
-    """
-    import tensorflow as tf
-
-    # load data & indicators
-    df = pd.read_csv(os.path.join(DATA_DIR, f"{ticker}.csv"), parse_dates=['Date'])
-    df.sort_values('Date', inplace=True)
-    df = add_technical_indicators(df)
-
-    # take only the last SEQ_LEN rows
-    last = df.iloc[-SEQ_LEN:][['Close','MA_10','MA_50','EMA_10','RSI']].values
-
-    # load scaler & model
-    scaler = pickle.load(open(os.path.join(MODEL_DIR, f"{ticker}_scaler.pkl"), 'rb'))
-    model  = tf.keras.models.load_model(os.path.join(MODEL_DIR, f"{ticker}_rnn.h5"))
-
-    # scale, reshape, predict
-    scaled = scaler.transform(last)
-    x = scaled.reshape((1, SEQ_LEN, len(features)))
-    pred_scaled = model.predict(x)
-    inv = scaler.inverse_transform(np.hstack([pred_scaled, np.zeros((1,4))]))[0,0]
-    return inv
-
-# Usage:
-# print("Tomorrow's forecast for TCS:", predict_next_day('TCS'))
